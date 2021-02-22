@@ -22,9 +22,10 @@ class Quad():
         self.mass = mass
         self.max_thrust_per_motor = max_thrust_per_motor
 
-        self.J = np.array([.03, .03, .06])  # [0.001, 0.001, 0.002])
-        arm_length = 0.2
-        h = np.cos(np.pi / 4) * arm_length
+        self.J = np.array([.002, .002, .025])  # [0.001, 0.001, 0.002])
+        arm_length = 0.15
+        # h = np.cos(np.pi / 4) * arm_length
+        h = arm_length / np.sqrt(2.0)
         self.x_f = np.array([h, -h, -h, h])
         self.y_f = np.array([-h, -h, h, h])
 
@@ -329,9 +330,6 @@ def compute_random_trajectory(quad, duration=30.0, dt=0.01):
         plt.show()
 
     # rescale time to get smooth start and end states
-    # pos_arena = np.concatenate([np.interp(scaled_time, t_coarse, pos_arena[:, 0]),
-    #                             np.interp(scaled_time, t_coarse, pos_arena[:, 1]),
-    #                             np.interp(scaled_time, t_coarse, pos_arena[:, 2])], axis=1)
     pos_blub_x = interpolate.interp1d(t_coarse, pos_arena[:, 0], kind="cubic", fill_value="extrapolate")
     pos_blub_y = interpolate.interp1d(t_coarse, pos_arena[:, 1], kind="cubic", fill_value="extrapolate")
     pos_blub_z = interpolate.interp1d(t_coarse, pos_arena[:, 2], kind="cubic", fill_value="extrapolate")
@@ -424,7 +422,7 @@ def compute_geometric_trajectory(quad, duration=30.0, dt=0.001):
 if __name__ == '__main__':
 
     start_time = time.time()
-    quad = Quad(0.772, 10.0)
+    quad = Quad(0.85, 10.0)
     debug = False
     output_fn = "/home/elia/Desktop/trajectory.csv"
     duration = 30.0

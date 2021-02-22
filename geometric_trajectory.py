@@ -4,6 +4,8 @@ import casadi as cs
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import ExpSineSquared
 
 from utils.q_funcs import q_dot_q, quaternion_inverse
 from utils.visualization import debug_plot, draw_poly
@@ -127,16 +129,123 @@ def check_trajectory(trajectory, inputs, tvec, plot=False):
     return True
 
 
-def compute_trajectory(quad, duration=30.0, dt=0.001):
+def compute_full_traj(t_np, pos_np, vel_np, alin_np):
+    len_traj = t_np.shape[0]
+    dt = np.mean(np.diff(t_np))
+    print(dt)
+
+    # Add gravity to accelerations
+    gravity = 9.81
+    thrust_np = alin_np + np.tile(np.array([[0, 0, 1]]), (len_traj, 1)) * gravity
+    # Compute body axes
+    z_b = thrust_np / np.sqrt(np.sum(thrust_np ** 2, 1))[:, np.newaxis]
+    # new way to compute attitude:
+    # https://math.stackexchange.com/questions/2251214/calculate-quaternions-from-two-directional-vectors
+    e_z = np.array([[0.0, 0.0, 1.0]])
+    q_w = 1.0 + np.sum(e_z * z_b, axis=1)
+    q_xyz = np.cross(e_z, z_b)
+    att_np = 0.5 * np.concatenate([np.expand_dims(q_w, axis=1), q_xyz], axis=1)
+    att_np = att_np / np.sqrt(np.sum(att_np ** 2, 1))[:, np.newaxis]
+
+    rate_np = np.zeros_like(pos_np)
+    f_t = np.zeros((len_traj, 1))
+    # for i in range(len_traj):
+    #     f_t[i, 0] = quad.mass * z_b[i].dot(thrust[i, :].T)
+
+    # Use numerical differentiation of quaternions
+    q_dot = np.gradient(att_np, axis=0) / dt
+    w_int = np.zeros((len_traj, 3))
+    for i in range(len_traj):
+        w_int[i, :] = 2.0 * q_dot_q(quaternion_inverse(att_np[i, :]), q_dot[i])[1:]
+        print(thrust_np[i])
+        f_t[i, 0] = quad.mass * thrust_np[i, 2]
+    rate_np[:, 0] = w_int[:, 0]
+    rate_np[:, 1] = w_int[:, 1]
+    rate_np[:, 2] = w_int[:, 2]
+
+    go_crazy_about_yaw = True
+    if go_crazy_about_yaw:
+        print("Maximum yawrate before adaption: %.3f" % np.max(np.abs(rate_np[:, 2])))
+        q_new = att_np
+        yaw_corr_acc = 0.0
+        for i in range(1, len_traj):
+            yaw_corr = -rate_np[i, 2] * dt
+            yaw_corr_acc += yaw_corr
+            q_corr = np.array([np.cos(yaw_corr_acc / 2.0), 0.0, 0.0, np.sin(yaw_corr_acc / 2.0)])
+            q_new[i, :] = q_dot_q(att_np[i, :], q_corr)
+            w_int[i, :] = 2.0 * q_dot_q(quaternion_inverse(att_np[i, :]), q_dot[i])[1:]
+
+        q_new_dot = np.gradient(q_new, axis=0) / dt
+        for i in range(1, len_traj):
+            w_int[i, :] = 2.0 * q_dot_q(quaternion_inverse(q_new[i, :]), q_new_dot[i])[1:]
+
+        att_np = q_new
+        rate_np[:, 0] = w_int[:, 0]
+        rate_np[:, 1] = w_int[:, 1]
+        rate_np[:, 2] = w_int[:, 2]
+        print("Maximum yawrate after adaption: %.3f" % np.max(np.abs(rate_np[:, 2])))
+
+    arot_np = np.gradient(rate_np, axis=0)
+    trajectory = np.concatenate([pos_np, att_np, vel_np, rate_np, alin_np, arot_np], axis=1)
+    motor_inputs = np.zeros((pos_np.shape[0], 4))
+
+    print(trajectory.shape)
+    print(motor_inputs.shape)
+    print(t_np.shape)
+
+    return trajectory, motor_inputs, t_np
+
+
+def compute_random_trajectory(quad, duration=30.0, dt=0.001):
+    debug = False
+    seed = None
+    if seed is None:
+        seed = np.random.randint(0, 9999)
+
+    # kernel to map functions that repeat exactly
+    kernel_z = ExpSineSquared(length_scale=1.5, periodicity=30)
+    kernel_y = ExpSineSquared(length_scale=4.5, periodicity=30) + ExpSineSquared(length_scale=4.0, periodicity=15)
+    kernel_x = ExpSineSquared(length_scale=4.5, periodicity=30) + ExpSineSquared(length_scale=4.5, periodicity=60)
+
+    gp_x = GaussianProcessRegressor(kernel=kernel_x)
+    gp_y = GaussianProcessRegressor(kernel=kernel_y)
+    gp_z = GaussianProcessRegressor(kernel=kernel_z)
+
+    # High resolution sampling for track boundaries
+    inputs_x = np.linspace(0, 60, 100)
+    inputs_y = np.linspace(0, 30, 100)
+    inputs_z = np.linspace(0, 60, 100)
+
+    x_sample_hr = gp_x.sample_y(inputs_x[:, np.newaxis], 1, random_state=seed)
+    y_sample_hr = gp_y.sample_y(inputs_y[:, np.newaxis], 1, random_state=seed)
+    z_sample_hr = gp_z.sample_y(inputs_z[:, np.newaxis], 1, random_state=seed)
+
+    if debug:
+        plt.plot(x_sample_hr, label="x")
+        plt.plot(y_sample_hr, label="y")
+        plt.plot(z_sample_hr, label="z")
+        plt.legend()
+        plt.show()
+
+
+    pos_np = np.concatenate([x_sample_hr, y_sample_hr, z_sample_hr], axis=1)
+    vel_np = np.zeros_like(pos_np)
+    acc_np = np.zeros_like(pos_np)
+    t_np = np.zeros(pos_np.shape[0])
+
+    trajectory, motor_inputs, t_vec = compute_full_traj(t_np, pos_np, vel_np, acc_np)
+
+    return trajectory, motor_inputs, t_vec
+
+
+def compute_geometric_trajectory(quad, duration=30.0, dt=0.001):
     # Use a breakpoint in the code line below to debug your script.
     print("Computing trajectory!")
 
     # define position trajectory symbolically
     t = cs.MX.sym("t")
     # t_speed is a function starting at zero and ending at zero that modulates time
-    t_speed = cs.sin(t / duration * cs.pi) * cs.sin(t / duration * cs.pi)
-    # t_adj = cs.integrator(t_speed)
-    # casadi cannot do symbolic integration --> write down the integrand by hand
+    # casadi cannot do symbolic integration --> write down the integrand by hand of 2.0*sin^2(t)
     t_adj = 2.0 * (t / 2.0 - cs.sin(2.0 / duration * cs.pi * t) / (4.0 * cs.pi / duration))
 
     # sphere trajectory rotating around x-axis
@@ -276,7 +385,12 @@ if __name__ == '__main__':
     debug = False
     output_fn = "/home/elia/Desktop/trajectory.csv"
 
-    trajectory, motor_inputs, t_vec = compute_trajectory(quad)
+    # trajectory, motor_inputs, t_vec = compute_geometric_trajectory(quad)
+    trajectory, motor_inputs, t_vec = compute_random_trajectory(quad)
+
+    print(trajectory.shape)
+    print(motor_inputs.shape)
+    print(t_vec.shape)
 
     if check_trajectory(trajectory, motor_inputs, t_vec, False):
         if debug:

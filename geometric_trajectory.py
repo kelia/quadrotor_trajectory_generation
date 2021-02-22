@@ -4,6 +4,7 @@ import casadi as cs
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy import interpolate
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ExpSineSquared
 
@@ -129,10 +130,68 @@ def check_trajectory(trajectory, inputs, tvec, plot=False):
     return True
 
 
-def compute_full_traj(t_np, pos_np, vel_np, alin_np):
+def smooth(x, window_len=11, window='hanning'):
+    """smooth the data using a window with requested size.
+
+    This method is based on the convolution of a scaled window with the signal.
+    The signal is prepared by introducing reflected copies of the signal
+    (with the window size) in both ends so that transient parts are minimized
+    in the begining and end part of the output signal.
+
+    input:
+        x: the input signal
+        window_len: the dimension of the smoothing window; should be an odd integer
+        window: the type of window from 'flat', 'hanning', 'hamming', 'bartlett', 'blackman'
+            flat window will produce a moving average smoothing.
+
+    output:
+        the smoothed signal
+
+    example:
+
+    t=linspace(-2,2,0.1)
+    x=sin(t)+randn(len(t))*0.1
+    y=smooth(x)
+
+    see also:
+
+    numpy.hanning, numpy.hamming, numpy.bartlett, numpy.blackman, numpy.convolve
+    scipy.signal.lfilter
+
+    TODO: the window parameter could be the window itself if an array instead of a string
+    NOTE: length(output) != length(input), to correct this: return y[(window_len/2-1):-(window_len/2)] instead of just y.
+    """
+
+    if x.ndim != 1:
+        raise ValueError("smooth only accepts 1 dimension arrays.")
+
+    if x.size < window_len:
+        raise ValueError("Input vector needs to be bigger than window size.")
+
+    if window_len < 3:
+        return x
+
+    if not window in ['flat', 'hanning', 'hamming', 'bartlett', 'blackman']:
+        raise ValueError("Window is on of 'flat', 'hanning', 'hamming', 'bartlett', 'blackman'")
+
+    # s = np.r_[x[(window_len - 1) // 2:0:-1], x, x[-2:-(window_len - 1) // 2:-1]]
+
+    x_start = np.repeat(x[0], (window_len - 1) // 2)
+    x_end = np.repeat(x[-1], (window_len - 1) // 2)
+    s = np.concatenate([x_start, x, x_end])
+
+    if window == 'flat':  # moving average
+        w = np.ones(window_len, 'd')
+    else:
+        w = eval('np.' + window + '(window_len)')
+
+    y = np.convolve(w / w.sum(), s, mode='valid')
+    return y
+
+
+def compute_full_traj(quad, t_np, pos_np, vel_np, alin_np):
     len_traj = t_np.shape[0]
     dt = np.mean(np.diff(t_np))
-    print(dt)
 
     # Add gravity to accelerations
     gravity = 9.81
@@ -149,98 +208,163 @@ def compute_full_traj(t_np, pos_np, vel_np, alin_np):
 
     rate_np = np.zeros_like(pos_np)
     f_t = np.zeros((len_traj, 1))
-    # for i in range(len_traj):
-    #     f_t[i, 0] = quad.mass * z_b[i].dot(thrust[i, :].T)
 
     # Use numerical differentiation of quaternions
     q_dot = np.gradient(att_np, axis=0) / dt
     w_int = np.zeros((len_traj, 3))
     for i in range(len_traj):
         w_int[i, :] = 2.0 * q_dot_q(quaternion_inverse(att_np[i, :]), q_dot[i])[1:]
-        print(thrust_np[i])
         f_t[i, 0] = quad.mass * thrust_np[i, 2]
     rate_np[:, 0] = w_int[:, 0]
     rate_np[:, 1] = w_int[:, 1]
     rate_np[:, 2] = w_int[:, 2]
 
     go_crazy_about_yaw = True
+    n_iter_yaw_fix = 20
     if go_crazy_about_yaw:
-        print("Maximum yawrate before adaption: %.3f" % np.max(np.abs(rate_np[:, 2])))
-        q_new = att_np
-        yaw_corr_acc = 0.0
-        for i in range(1, len_traj):
-            yaw_corr = -rate_np[i, 2] * dt
-            yaw_corr_acc += yaw_corr
-            q_corr = np.array([np.cos(yaw_corr_acc / 2.0), 0.0, 0.0, np.sin(yaw_corr_acc / 2.0)])
-            q_new[i, :] = q_dot_q(att_np[i, :], q_corr)
-            w_int[i, :] = 2.0 * q_dot_q(quaternion_inverse(att_np[i, :]), q_dot[i])[1:]
+        for iter_yaw_fix in range(n_iter_yaw_fix):
+            print("Maximum yawrate before adaption %d / %d: %.6f" % (
+                iter_yaw_fix, n_iter_yaw_fix, np.max(np.abs(rate_np[:, 2]))))
+            q_new = att_np
+            yaw_corr_acc = 0.0
+            for i in range(1, len_traj):
+                yaw_corr = -rate_np[i, 2] * dt
+                yaw_corr_acc += yaw_corr
+                q_corr = np.array([np.cos(yaw_corr_acc / 2.0), 0.0, 0.0, np.sin(yaw_corr_acc / 2.0)])
+                q_new[i, :] = q_dot_q(att_np[i, :], q_corr)
+                w_int[i, :] = 2.0 * q_dot_q(quaternion_inverse(att_np[i, :]), q_dot[i])[1:]
 
-        q_new_dot = np.gradient(q_new, axis=0) / dt
-        for i in range(1, len_traj):
-            w_int[i, :] = 2.0 * q_dot_q(quaternion_inverse(q_new[i, :]), q_new_dot[i])[1:]
+            q_new_dot = np.gradient(q_new, axis=0) / dt
+            for i in range(1, len_traj):
+                w_int[i, :] = 2.0 * q_dot_q(quaternion_inverse(q_new[i, :]), q_new_dot[i])[1:]
 
-        att_np = q_new
-        rate_np[:, 0] = w_int[:, 0]
-        rate_np[:, 1] = w_int[:, 1]
-        rate_np[:, 2] = w_int[:, 2]
-        print("Maximum yawrate after adaption: %.3f" % np.max(np.abs(rate_np[:, 2])))
+            att_np = q_new
+            rate_np[:, 0] = w_int[:, 0]
+            rate_np[:, 1] = w_int[:, 1]
+            rate_np[:, 2] = w_int[:, 2]
+            print("Maximum yawrate after adaption: %.3f" % np.max(np.abs(rate_np[:, 2])))
+            if np.max(np.abs(rate_np[:, 2])) < 0.01:
+                break
 
     arot_np = np.gradient(rate_np, axis=0)
     trajectory = np.concatenate([pos_np, att_np, vel_np, rate_np, alin_np, arot_np], axis=1)
     motor_inputs = np.zeros((pos_np.shape[0], 4))
 
-    print(trajectory.shape)
-    print(motor_inputs.shape)
-    print(t_np.shape)
+    # Compute inputs
+    rate_dot = np.gradient(rate_np, axis=0) / dt
+    rate_x_Jrate = np.array([(quad.J[2] - quad.J[1]) * rate_np[:, 2] * rate_np[:, 1],
+                             (quad.J[0] - quad.J[2]) * rate_np[:, 0] * rate_np[:, 2],
+                             (quad.J[1] - quad.J[0]) * rate_np[:, 1] * rate_np[:, 0]]).T
+
+    tau = rate_dot * quad.J[np.newaxis, :] + rate_x_Jrate
+    b = np.concatenate((tau, f_t), axis=-1)
+    a_mat = np.concatenate((quad.y_f[np.newaxis, :], -quad.x_f[np.newaxis, :],
+                            quad.z_l_tau[np.newaxis, :], np.ones_like(quad.z_l_tau)[np.newaxis, :]), 0)
+
+    for i in range(len_traj):
+        motor_inputs[i, :] = np.linalg.solve(a_mat, b[i, :])
 
     return trajectory, motor_inputs, t_np
 
 
-def compute_random_trajectory(quad, duration=30.0, dt=0.001):
+def compute_random_trajectory(quad, duration=30.0, dt=0.01):
+    print("Computing random trajectory!")
+
+    assert duration == 30.0
+    assert dt == 0.01
+
     debug = False
-    seed = None
+    seed = 20
     if seed is None:
         seed = np.random.randint(0, 9999)
 
+    arena_bound_max = np.array([2.0, 5.0, 5.0])
+    arena_bound_min = np.array([-5.0, -5.0, 1.0])
+
+    scale_x = 1.0
+    scale_y = 1.0
+    scale_z = 1.0
+
     # kernel to map functions that repeat exactly
-    kernel_z = ExpSineSquared(length_scale=1.5, periodicity=30)
-    kernel_y = ExpSineSquared(length_scale=4.5, periodicity=30) + ExpSineSquared(length_scale=4.0, periodicity=15)
-    kernel_x = ExpSineSquared(length_scale=4.5, periodicity=30) + ExpSineSquared(length_scale=4.5, periodicity=60)
+    kernel_x = scale_x * (
+            ExpSineSquared(length_scale=0.5, periodicity=15) + ExpSineSquared(length_scale=4.0, periodicity=15))
+    kernel_y = scale_y * (
+            ExpSineSquared(length_scale=1.0, periodicity=30) + ExpSineSquared(length_scale=4.0, periodicity=15))
+    kernel_z = scale_z * ExpSineSquared(length_scale=4.5, periodicity=30)
 
     gp_x = GaussianProcessRegressor(kernel=kernel_x)
     gp_y = GaussianProcessRegressor(kernel=kernel_y)
     gp_z = GaussianProcessRegressor(kernel=kernel_z)
 
-    # High resolution sampling for track boundaries
-    inputs_x = np.linspace(0, 60, 100)
-    inputs_y = np.linspace(0, 30, 100)
-    inputs_z = np.linspace(0, 60, 100)
+    t_coarse = np.linspace(0.0, duration, int(duration / 0.1), endpoint=False)
+    t_vec, dt = np.linspace(0.0, duration, int(duration / dt), endpoint=False, retstep=True)
 
-    x_sample_hr = gp_x.sample_y(inputs_x[:, np.newaxis], 1, random_state=seed)
-    y_sample_hr = gp_y.sample_y(inputs_y[:, np.newaxis], 1, random_state=seed)
-    z_sample_hr = gp_z.sample_y(inputs_z[:, np.newaxis], 1, random_state=seed)
+    t = cs.MX.sym("t")
+    # t_speed is a function starting at zero and ending at zero that modulates time
+    # casadi cannot do symbolic integration --> write down the integrand by hand of 2.0*sin^2(t)
+    t_adj = 2.0 * (t / 2.0 - cs.sin(2.0 / duration * cs.pi * t) / (4.0 * cs.pi / duration))
+    f_t_adj = cs.Function('t_adj', [t], [t_adj])
+    scaled_time = f_t_adj(t_vec)
+
+    print("sampling x...")
+    x_sample_hr = gp_x.sample_y(t_coarse[:, np.newaxis], 1, random_state=seed)
+    print("sampling y...")
+    y_sample_hr = gp_y.sample_y(t_coarse[:, np.newaxis], 1, random_state=seed + 1)
+    print("sampling z...")
+    z_sample_hr = gp_z.sample_y(t_coarse[:, np.newaxis], 1, random_state=seed + 2)
+
+    pos_np = np.concatenate([x_sample_hr, y_sample_hr, z_sample_hr], axis=1)
+    # scale to arena bounds
+    max_traj = np.max(pos_np, axis=0)
+    min_traj = np.min(pos_np, axis=0)
+    pos_centered = pos_np - (max_traj + min_traj) / 2.0
+    pos_scaled = pos_centered * (arena_bound_max - arena_bound_min) / (max_traj - min_traj)
+    pos_arena = pos_scaled + (arena_bound_max + arena_bound_min) / 2.0
 
     if debug:
-        plt.plot(x_sample_hr, label="x")
-        plt.plot(y_sample_hr, label="y")
-        plt.plot(z_sample_hr, label="z")
+        plt.plot(pos_arena[:, 0], label="x")
+        plt.plot(pos_arena[:, 1], label="y")
+        plt.plot(pos_arena[:, 2], label="z")
         plt.legend()
         plt.show()
 
+    # rescale time to get smooth start and end states
+    # pos_arena = np.concatenate([np.interp(scaled_time, t_coarse, pos_arena[:, 0]),
+    #                             np.interp(scaled_time, t_coarse, pos_arena[:, 1]),
+    #                             np.interp(scaled_time, t_coarse, pos_arena[:, 2])], axis=1)
+    pos_blub_x = interpolate.interp1d(t_coarse, pos_arena[:, 0], kind="cubic", fill_value="extrapolate")
+    pos_blub_y = interpolate.interp1d(t_coarse, pos_arena[:, 1], kind="cubic", fill_value="extrapolate")
+    pos_blub_z = interpolate.interp1d(t_coarse, pos_arena[:, 2], kind="cubic", fill_value="extrapolate")
+    pos_arena = np.concatenate([pos_blub_x(scaled_time),
+                                pos_blub_y(scaled_time),
+                                pos_blub_z(scaled_time)], axis=1)
 
-    pos_np = np.concatenate([x_sample_hr, y_sample_hr, z_sample_hr], axis=1)
-    vel_np = np.zeros_like(pos_np)
-    acc_np = np.zeros_like(pos_np)
-    t_np = np.zeros(pos_np.shape[0])
+    pos_arena = np.concatenate([smooth(np.squeeze(pos_arena[:, 0]), window_len=11)[:, np.newaxis],
+                                smooth(np.squeeze(pos_arena[:, 1]), window_len=11)[:, np.newaxis],
+                                smooth(np.squeeze(pos_arena[:, 2]), window_len=11)[:, np.newaxis]], axis=1)
 
-    trajectory, motor_inputs, t_vec = compute_full_traj(t_np, pos_np, vel_np, acc_np)
+    # compute numeric derivative & smooth things
+    vel_arena = np.gradient(pos_arena, axis=0) / dt
+    vel_arena = np.concatenate([smooth(np.squeeze(vel_arena[:, 0]), window_len=11)[:, np.newaxis],
+                                smooth(np.squeeze(vel_arena[:, 1]), window_len=11)[:, np.newaxis],
+                                smooth(np.squeeze(vel_arena[:, 2]), window_len=11)[:, np.newaxis]], axis=1)
+    acc_arena = np.gradient(vel_arena, axis=0) / dt
+    acc_arena = np.concatenate([smooth(np.squeeze(acc_arena[:, 0]), window_len=11)[:, np.newaxis],
+                                smooth(np.squeeze(acc_arena[:, 1]), window_len=11)[:, np.newaxis],
+                                smooth(np.squeeze(acc_arena[:, 2]), window_len=11)[:, np.newaxis]], axis=1)
+    t_np = t_vec
+
+    trajectory, motor_inputs, t_vec = compute_full_traj(quad, t_np, pos_arena, vel_arena, acc_arena)
 
     return trajectory, motor_inputs, t_vec
 
 
 def compute_geometric_trajectory(quad, duration=30.0, dt=0.001):
-    # Use a breakpoint in the code line below to debug your script.
-    print("Computing trajectory!")
+    print("Computing geometric trajectory!")
+    assert duration == 30.0
+    assert dt == 0.001
+
+    debug = False
 
     # define position trajectory symbolically
     t = cs.MX.sym("t")
@@ -276,104 +400,23 @@ def compute_geometric_trajectory(quad, duration=30.0, dt=0.001):
     pos_list = []
     vel_list = []
     alin_list = []
-    att_list = []
-    rate_list = []
-    thrust_list = []
     t_adj_list = []
     for t_curr in t_vec:
         t_adj_list.append(f_t_adj(t_curr).full().squeeze())
         pos_list.append(f_pos(t_curr).full().squeeze())
         vel_list.append(f_vel(t_curr).full().squeeze())
-        # compute attitude from acceleration
-        gravity = np.array([0.0, 0.0, 9.81])
-        curr_acc = f_acc(t_curr).full().squeeze()
-        alin_list.append(curr_acc)
-        thrust = curr_acc + gravity
-        thrust_list.append(np.linalg.norm(thrust))
-
-        z_b = thrust / np.linalg.norm(thrust)  # np.sqrt(np.sum(thrust ** 2, 1)) #[:, np.newaxis]
-        e_z = np.array([0.0, 0.0, 1.0])
-        # https://math.stackexchange.com/questions/2251214/calculate-quaternions-from-two-directional-vectors
-        q_w = 1.0 + np.dot(e_z, z_b)
-        q_xyz = np.cross(e_z, z_b)
-        q = 0.5 * np.array([q_w, q_xyz[0], q_xyz[1], q_xyz[2]])
-        q = q / np.linalg.norm(q)
-        att_list.append(q)
+        alin_list.append(f_acc(t_curr).full().squeeze())
 
     t_adj_np = np.array(t_adj_list)
     pos_np = np.array(pos_list)
     vel_np = np.array(vel_list)
     alin_np = np.array(alin_list)
-    att_np = np.array(att_list)
-    rate_np = np.zeros_like(pos_np)
-    thrust_np = np.array(thrust_list)
 
-    len_traj = att_np.shape[0]
-    # there are possible quaternion flips, let's remove them first...
-    for i in range(1, len_traj):
-        # compute difference w.r.t. previous quaternion
-        quat_diff_no_flip = np.linalg.norm(att_np[i, :] - att_np[i - 1, :])
-        quat_diff_flip = np.linalg.norm(att_np[i, :] + att_np[i - 1, :])
-        if quat_diff_flip < quat_diff_no_flip:
-            print("detected flip ")
+    if debug:
+        plt.plot(t_adj_np)
+        plt.show()
 
-    # compute the bodyrates by numeric differentiation of the attitude
-    q_dot = np.gradient(att_np, axis=0) / dt
-    w_int = np.zeros((len_traj, 3))
-    f_t = np.zeros((len_traj, 1))
-    for i in range(len_traj):
-        w_int[i, :] = 2.0 * q_dot_q(quaternion_inverse(att_np[i, :]), q_dot[i])[1:]
-        f_t[i, 0] = quad.mass * thrust_np[i]
-    rate_np[:, 0] = w_int[:, 0]
-    rate_np[:, 1] = w_int[:, 1]
-    rate_np[:, 2] = w_int[:, 2]
-
-    go_crazy_about_yaw = True
-    n_iter_yaw_fix = 20
-    if go_crazy_about_yaw:
-        for iter_yaw_fix in range(n_iter_yaw_fix):
-            print("Maximum yawrate before adaption %d / %d: %.6f" % (
-                iter_yaw_fix, n_iter_yaw_fix, np.max(np.abs(rate_np[:, 2]))))
-            q_new = att_np
-            yaw_corr_acc = 0.0
-            for i in range(1, len_traj):
-                yaw_corr = -rate_np[i, 2] * dt
-                yaw_corr_acc += yaw_corr
-                q_corr = np.array([np.cos(yaw_corr_acc / 2.0), 0.0, 0.0, np.sin(yaw_corr_acc / 2.0)])
-                q_new[i, :] = q_dot_q(att_np[i, :], q_corr)
-                w_int[i, :] = 2.0 * q_dot_q(quaternion_inverse(att_np[i, :]), q_dot[i])[1:]
-
-            q_new_dot = np.gradient(q_new, axis=0) / dt
-            for i in range(1, len_traj):
-                w_int[i, :] = 2.0 * q_dot_q(quaternion_inverse(q_new[i, :]), q_new_dot[i])[1:]
-
-            att_np = q_new
-            rate_np[:, 0] = w_int[:, 0]
-            rate_np[:, 1] = w_int[:, 1]
-            rate_np[:, 2] = w_int[:, 2]
-            print("Maximum yawrate after adaption: %.3f" % np.max(np.abs(rate_np[:, 2])))
-
-    arot_np = np.gradient(rate_np, axis=0)
-    trajectory = np.concatenate([pos_np, att_np, vel_np, rate_np, alin_np, arot_np], axis=1)
-    motor_inputs = np.zeros((pos_np.shape[0], 4))
-
-    # Compute inputs
-    rate_dot = np.gradient(rate_np, axis=0) / dt
-    rate_x_Jrate = np.array([(quad.J[2] - quad.J[1]) * rate_np[:, 2] * rate_np[:, 1],
-                             (quad.J[0] - quad.J[2]) * rate_np[:, 0] * rate_np[:, 2],
-                             (quad.J[1] - quad.J[0]) * rate_np[:, 1] * rate_np[:, 0]]).T
-
-    tau = rate_dot * quad.J[np.newaxis, :] + rate_x_Jrate
-    b = np.concatenate((tau, f_t), axis=-1)
-    a_mat = np.concatenate((quad.y_f[np.newaxis, :], -quad.x_f[np.newaxis, :],
-                            quad.z_l_tau[np.newaxis, :], np.ones_like(quad.z_l_tau)[np.newaxis, :]), 0)
-
-    for i in range(len_traj):
-        motor_inputs[i, :] = np.linalg.solve(a_mat, b[i, :])
-
-    fig, ax = plt.subplots()
-    ax.plot(t_vec, t_adj_np)
-    plt.show()
+    trajectory, motor_inputs, t_vec = compute_full_traj(quad, t_vec, pos_np, vel_np, alin_np)
 
     return trajectory, motor_inputs, t_vec
 
@@ -384,18 +427,18 @@ if __name__ == '__main__':
     quad = Quad(0.772, 10.0)
     debug = False
     output_fn = "/home/elia/Desktop/trajectory.csv"
+    duration = 30.0
+    dt = 0.01
 
-    # trajectory, motor_inputs, t_vec = compute_geometric_trajectory(quad)
-    trajectory, motor_inputs, t_vec = compute_random_trajectory(quad)
-
-    print(trajectory.shape)
-    print(motor_inputs.shape)
-    print(t_vec.shape)
+    # trajectory, motor_inputs, t_vec = compute_geometric_trajectory(quad, duration, dt)
+    trajectory, motor_inputs, t_vec = compute_random_trajectory(quad, duration, dt)
 
     if check_trajectory(trajectory, motor_inputs, t_vec, False):
         if debug:
             debug_plot(trajectory, motor_inputs, t_vec)
         draw_poly(trajectory[:, :13], motor_inputs, t_vec)
+
+        # TODO: subsample the trajectory
 
         # save trajectory to csv
         df_traj = pd.DataFrame()
@@ -430,5 +473,6 @@ if __name__ == '__main__':
         df_traj['u_3'] = motor_inputs[:, 2] / quad.max_thrust_per_motor
         df_traj['u_4'] = motor_inputs[:, 3] / quad.max_thrust_per_motor
 
+        print("Saving trajectory to [%s]." % output_fn)
         df_traj.to_csv(output_fn, index=False)
     print("Trajectory generation took [%.3f] seconds." % (time.time() - start_time))

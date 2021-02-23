@@ -215,7 +215,7 @@ def compute_full_traj(quad, t_np, pos_np, vel_np, alin_np):
     w_int = np.zeros((len_traj, 3))
     for i in range(len_traj):
         w_int[i, :] = 2.0 * q_dot_q(quaternion_inverse(att_np[i, :]), q_dot[i])[1:]
-        f_t[i, 0] = quad.mass * thrust_np[i, 2]
+        f_t[i, 0] = quad.mass * z_b[i].dot(thrust_np[i, :].T)
     rate_np[:, 0] = w_int[:, 0]
     rate_np[:, 1] = w_int[:, 1]
     rate_np[:, 2] = w_int[:, 2]
@@ -244,7 +244,7 @@ def compute_full_traj(quad, t_np, pos_np, vel_np, alin_np):
             rate_np[:, 1] = w_int[:, 1]
             rate_np[:, 2] = w_int[:, 2]
             print("Maximum yawrate after adaption: %.3f" % np.max(np.abs(rate_np[:, 2])))
-            if np.max(np.abs(rate_np[:, 2])) < 0.01:
+            if np.max(np.abs(rate_np[:, 2])) < 0.005:
                 break
 
     arot_np = np.gradient(rate_np, axis=0)
@@ -268,30 +268,28 @@ def compute_full_traj(quad, t_np, pos_np, vel_np, alin_np):
     return trajectory, motor_inputs, t_np
 
 
-def compute_random_trajectory(quad, duration=30.0, dt=0.01):
+def compute_random_trajectory(quad, arena_bound_max, arena_bound_min, freq_x, freq_y, freq_z, duration=30.0, dt=0.01):
     print("Computing random trajectory!")
 
-    assert duration == 30.0
+    # assert duration == 30.0
     assert dt == 0.01
 
     debug = False
-    seed = 20
+    seed = None  # 20
     if seed is None:
         seed = np.random.randint(0, 9999)
 
-    arena_bound_max = np.array([2.0, 5.0, 5.0])
-    arena_bound_min = np.array([-5.0, -5.0, 1.0])
-
-    scale_x = 1.0
-    scale_y = 1.0
-    scale_z = 1.0
-
     # kernel to map functions that repeat exactly
-    kernel_x = scale_x * (
-            ExpSineSquared(length_scale=0.5, periodicity=15) + ExpSineSquared(length_scale=4.0, periodicity=15))
-    kernel_y = scale_y * (
-            ExpSineSquared(length_scale=1.0, periodicity=30) + ExpSineSquared(length_scale=4.0, periodicity=15))
-    kernel_z = scale_z * ExpSineSquared(length_scale=4.5, periodicity=30)
+    print("seed is: %d", seed)
+    kernel_y = ExpSineSquared(length_scale=freq_x, periodicity=17) \
+               + ExpSineSquared(length_scale=3.0, periodicity=23) \
+               + ExpSineSquared(length_scale=4.0, periodicity=51)
+    kernel_x = ExpSineSquared(length_scale=freq_y, periodicity=37) \
+               + ExpSineSquared(length_scale=3.0, periodicity=61) \
+               + ExpSineSquared(length_scale=4.0, periodicity=13)
+    kernel_z = ExpSineSquared(length_scale=freq_z, periodicity=19) \
+               + ExpSineSquared(length_scale=3.0, periodicity=29) \
+               + ExpSineSquared(length_scale=4.0, periodicity=53)
 
     gp_x = GaussianProcessRegressor(kernel=kernel_x)
     gp_y = GaussianProcessRegressor(kernel=kernel_y)
@@ -303,7 +301,14 @@ def compute_random_trajectory(quad, duration=30.0, dt=0.01):
     t = cs.MX.sym("t")
     # t_speed is a function starting at zero and ending at zero that modulates time
     # casadi cannot do symbolic integration --> write down the integrand by hand of 2.0*sin^2(t)
-    t_adj = 2.0 * (t / 2.0 - cs.sin(2.0 / duration * cs.pi * t) / (4.0 * cs.pi / duration))
+    # t_adj = 2.0 * (t / 2.0 - cs.sin(2.0 / duration * cs.pi * t) / (4.0 * cs.pi / duration))
+    tau = t / duration
+    t_adj = 1.524 * duration * (-(
+            8 * cs.cos(tau * cs.pi) * cs.constpow(cs.sin(tau * cs.pi), 5) + 10 * cs.cos(tau * cs.pi) * cs.constpow(
+        cs.sin(tau * cs.pi), 3) + 39 * cs.sin(tau * cs.pi) * cs.cos(tau * cs.pi) + 12 * cs.sin(
+        2 * tau * cs.pi) * cs.cos(2 * tau * cs.pi) - 63 * tau * cs.pi) / (96 * cs.pi))
+
+    # t_adj = t / duration - 1.0 / 9.0 * cs.constpow(t / duration, 9.0)
     f_t_adj = cs.Function('t_adj', [t], [t_adj])
     scaled_time = f_t_adj(t_vec)
 
@@ -359,7 +364,7 @@ def compute_random_trajectory(quad, duration=30.0, dt=0.01):
 
 def compute_geometric_trajectory(quad, duration=30.0, dt=0.001):
     print("Computing geometric trajectory!")
-    assert duration == 30.0
+    # assert duration == 30.0
     assert dt == 0.001
 
     debug = False
@@ -368,15 +373,27 @@ def compute_geometric_trajectory(quad, duration=30.0, dt=0.001):
     t = cs.MX.sym("t")
     # t_speed is a function starting at zero and ending at zero that modulates time
     # casadi cannot do symbolic integration --> write down the integrand by hand of 2.0*sin^2(t)
-    t_adj = 2.0 * (t / 2.0 - cs.sin(2.0 / duration * cs.pi * t) / (4.0 * cs.pi / duration))
+    # t_adj = 2.0 * (t / 2.0 - cs.sin(2.0 / duration * cs.pi * t) / (4.0 * cs.pi / duration))
+    tau = t / duration
+    t_adj = 1.524 * duration * (-(
+            8 * cs.cos(tau * cs.pi) * cs.constpow(cs.sin(tau * cs.pi), 5) + 10 * cs.cos(tau * cs.pi) * cs.constpow(
+        cs.sin(tau * cs.pi), 3) + 39 * cs.sin(tau * cs.pi) * cs.cos(tau * cs.pi) + 12 * cs.sin(
+        2 * tau * cs.pi) * cs.cos(2 * tau * cs.pi) - 63 * tau * cs.pi) / (96 * cs.pi))
 
     # sphere trajectory rotating around x-axis
-    radius = 5.0
-    freq_slow = 0.1
-    freq_fast = cs.sqrt(3.0)
-    pos_x = 3.5 + radius * cs.cos(freq_fast * t_adj)
-    pos_y = 2 + radius * (cs.sin(freq_fast * t_adj) * cs.cos(freq_slow * t_adj))
-    pos_z = 3.5 + radius * (cs.sin(freq_fast * t_adj) * cs.sin(freq_slow * t_adj))
+    radius_x = 5.0
+    radius_y = 3.5
+    radius_z = 2.5
+
+    # fast config
+    freq_slow = 0.009
+    freq_fast = 0.33
+    # slow config
+    # freq_slow = 0.02
+    # freq_fast = 0.12
+    pos_x = 3.0 + radius_x * (cs.sin(2.0 * cs.pi * freq_fast * t_adj) * cs.cos(2.0 * cs.pi * freq_slow * t_adj))
+    pos_y = 1.0 + radius_y * (cs.cos(2.0 * cs.pi * freq_fast * t_adj))  # * cs.cos(2.0 * cs.pi * freq_slow * t_adj))
+    pos_z = 3.5 + radius_z * (cs.sin(2.0 * cs.pi * freq_fast * t_adj) * cs.sin(2.0 * cs.pi * freq_slow * t_adj))
 
     # TODO: define yaw trajectory
     pos = cs.vertcat(pos_x, pos_y, pos_z)
@@ -385,7 +402,7 @@ def compute_geometric_trajectory(quad, duration=30.0, dt=0.001):
     jerk = cs.jacobian(acc, t)
     snap = cs.jacobian(jerk, t)
 
-    t_vec, dt = np.linspace(0.0, 30.0, int(duration / dt), endpoint=False, retstep=True)
+    t_vec, dt = np.linspace(0.0, duration, int(duration / dt), endpoint=False, retstep=True)
 
     f_t_adj = cs.Function('t_adj', [t], [t_adj])
     f_pos = cs.Function('f_pos', [t], [pos])
@@ -424,12 +441,28 @@ if __name__ == '__main__':
     start_time = time.time()
     quad = Quad(0.85, 10.0)
     debug = False
-    output_fn = "/home/elia/Desktop/trajectory.csv"
-    duration = 30.0
-    dt = 0.01
+    arena_bound_max = np.array([8.0, 5.0, 5.0])
+    arena_bound_min = np.array([-4.0, -4.0, 1.0])
 
+    ############################################
+    # geometric trajectory settings
+    # dt = 0.001
+    # duration = 60.0
+    # output_fn = "/home/elia/Downloads/sat06.csv"
     # trajectory, motor_inputs, t_vec = compute_geometric_trajectory(quad, duration, dt)
-    trajectory, motor_inputs, t_vec = compute_random_trajectory(quad, duration, dt)
+    ############################################
+
+    ############################################
+    # random trajectory settings
+    freq_x = 0.29
+    freq_y = 0.27
+    freq_z = 0.7
+    dt = 0.01
+    duration = 120.0
+    output_fn = "/home/elia/Downloads/rp10.csv"
+    trajectory, motor_inputs, t_vec = compute_random_trajectory(quad, arena_bound_max, arena_bound_min, freq_x, freq_y,
+                                                                freq_z, duration, dt)
+    ############################################
 
     if check_trajectory(trajectory, motor_inputs, t_vec, False):
         if debug:
@@ -438,38 +471,40 @@ if __name__ == '__main__':
 
         # TODO: subsample the trajectory
 
+        take_every_nth = int(0.01 / dt)
+
         # save trajectory to csv
         df_traj = pd.DataFrame()
-        df_traj['t'] = t_vec
-        df_traj['p_x'] = trajectory[:, 0]
-        df_traj['p_y'] = trajectory[:, 1]
-        df_traj['p_z'] = trajectory[:, 2]
+        df_traj['t'] = t_vec[::take_every_nth]
+        df_traj['p_x'] = trajectory[::take_every_nth, 0]
+        df_traj['p_y'] = trajectory[::take_every_nth, 1]
+        df_traj['p_z'] = trajectory[::take_every_nth, 2]
 
-        df_traj['q_w'] = trajectory[:, 3]
-        df_traj['q_x'] = trajectory[:, 4]
-        df_traj['q_y'] = trajectory[:, 5]
-        df_traj['q_z'] = trajectory[:, 6]
+        df_traj['q_w'] = trajectory[::take_every_nth, 3]
+        df_traj['q_x'] = trajectory[::take_every_nth, 4]
+        df_traj['q_y'] = trajectory[::take_every_nth, 5]
+        df_traj['q_z'] = trajectory[::take_every_nth, 6]
 
-        df_traj['v_x'] = trajectory[:, 7]
-        df_traj['v_y'] = trajectory[:, 8]
-        df_traj['v_z'] = trajectory[:, 9]
+        df_traj['v_x'] = trajectory[::take_every_nth, 7]
+        df_traj['v_y'] = trajectory[::take_every_nth, 8]
+        df_traj['v_z'] = trajectory[::take_every_nth, 9]
 
-        df_traj['w_x'] = trajectory[:, 10]
-        df_traj['w_y'] = trajectory[:, 11]
-        df_traj['w_z'] = trajectory[:, 12]
+        df_traj['w_x'] = trajectory[::take_every_nth, 10]
+        df_traj['w_y'] = trajectory[::take_every_nth, 11]
+        df_traj['w_z'] = trajectory[::take_every_nth, 12]
 
-        df_traj['a_lin_x'] = trajectory[:, 13]
-        df_traj['a_lin_y'] = trajectory[:, 14]
-        df_traj['a_lin_z'] = trajectory[:, 15]
+        df_traj['a_lin_x'] = trajectory[::take_every_nth, 13]
+        df_traj['a_lin_y'] = trajectory[::take_every_nth, 14]
+        df_traj['a_lin_z'] = trajectory[::take_every_nth, 15]
 
-        df_traj['a_rot_x'] = trajectory[:, 16]
-        df_traj['a_rot_y'] = trajectory[:, 17]
-        df_traj['a_rot_z'] = trajectory[:, 18]
+        df_traj['a_rot_x'] = trajectory[::take_every_nth, 16]
+        df_traj['a_rot_y'] = trajectory[::take_every_nth, 17]
+        df_traj['a_rot_z'] = trajectory[::take_every_nth, 18]
 
-        df_traj['u_1'] = motor_inputs[:, 0] / quad.max_thrust_per_motor
-        df_traj['u_2'] = motor_inputs[:, 1] / quad.max_thrust_per_motor
-        df_traj['u_3'] = motor_inputs[:, 2] / quad.max_thrust_per_motor
-        df_traj['u_4'] = motor_inputs[:, 3] / quad.max_thrust_per_motor
+        df_traj['u_1'] = motor_inputs[::take_every_nth, 0] / quad.max_thrust_per_motor
+        df_traj['u_2'] = motor_inputs[::take_every_nth, 1] / quad.max_thrust_per_motor
+        df_traj['u_3'] = motor_inputs[::take_every_nth, 2] / quad.max_thrust_per_motor
+        df_traj['u_4'] = motor_inputs[::take_every_nth, 3] / quad.max_thrust_per_motor
 
         print("Saving trajectory to [%s]." % output_fn)
         df_traj.to_csv(output_fn, index=False)

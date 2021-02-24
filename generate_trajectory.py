@@ -1,3 +1,4 @@
+import argparse
 import time
 
 import casadi as cs
@@ -22,9 +23,8 @@ class Quad():
         self.mass = mass
         self.max_thrust_per_motor = max_thrust_per_motor
 
-        self.J = np.array([.002, .002, .025])  # [0.001, 0.001, 0.002])
+        self.J = np.array([.002, .002, .025])
         arm_length = 0.15
-        # h = np.cos(np.pi / 4) * arm_length
         h = arm_length / np.sqrt(2.0)
         self.x_f = np.array([h, -h, -h, h])
         self.y_f = np.array([-h, -h, h, h])
@@ -220,9 +220,9 @@ def compute_full_traj(quad, t_np, pos_np, vel_np, alin_np):
     rate_np[:, 1] = w_int[:, 1]
     rate_np[:, 2] = w_int[:, 2]
 
-    go_crazy_about_yaw = True
+    minimize_yaw_rate = True
     n_iter_yaw_fix = 20
-    if go_crazy_about_yaw:
+    if minimize_yaw_rate:
         for iter_yaw_fix in range(n_iter_yaw_fix):
             print("Maximum yawrate before adaption %d / %d: %.6f" % (
                 iter_yaw_fix, n_iter_yaw_fix, np.max(np.abs(rate_np[:, 2]))))
@@ -270,8 +270,6 @@ def compute_full_traj(quad, t_np, pos_np, vel_np, alin_np):
 
 def compute_random_trajectory(quad, arena_bound_max, arena_bound_min, freq_x, freq_y, freq_z, duration=30.0, dt=0.01):
     print("Computing random trajectory!")
-
-    # assert duration == 30.0
     assert dt == 0.01
 
     debug = False
@@ -280,7 +278,7 @@ def compute_random_trajectory(quad, arena_bound_max, arena_bound_min, freq_x, fr
         seed = np.random.randint(0, 9999)
 
     # kernel to map functions that repeat exactly
-    print("seed is: %d", seed)
+    print("seed is: %d" % seed)
     kernel_y = ExpSineSquared(length_scale=freq_x, periodicity=17) \
                + ExpSineSquared(length_scale=3.0, periodicity=23) \
                + ExpSineSquared(length_scale=4.0, periodicity=51)
@@ -308,7 +306,6 @@ def compute_random_trajectory(quad, arena_bound_max, arena_bound_min, freq_x, fr
         cs.sin(tau * cs.pi), 3) + 39 * cs.sin(tau * cs.pi) * cs.cos(tau * cs.pi) + 12 * cs.sin(
         2 * tau * cs.pi) * cs.cos(2 * tau * cs.pi) - 63 * tau * cs.pi) / (96 * cs.pi))
 
-    # t_adj = t / duration - 1.0 / 9.0 * cs.constpow(t / duration, 9.0)
     f_t_adj = cs.Function('t_adj', [t], [t_adj])
     scaled_time = f_t_adj(t_vec)
 
@@ -364,7 +361,6 @@ def compute_random_trajectory(quad, arena_bound_max, arena_bound_min, freq_x, fr
 
 def compute_geometric_trajectory(quad, duration=30.0, dt=0.001):
     print("Computing geometric trajectory!")
-    # assert duration == 30.0
     assert dt == 0.001
 
     debug = False
@@ -386,13 +382,13 @@ def compute_geometric_trajectory(quad, duration=30.0, dt=0.001):
     radius_z = 2.5
 
     # fast config
-    freq_slow = 0.009
-    freq_fast = 0.33
+    # freq_slow = 0.009
+    # freq_fast = 0.33
     # slow config
-    # freq_slow = 0.02
-    # freq_fast = 0.12
+    freq_slow = 0.02
+    freq_fast = 0.12
     pos_x = 3.0 + radius_x * (cs.sin(2.0 * cs.pi * freq_fast * t_adj) * cs.cos(2.0 * cs.pi * freq_slow * t_adj))
-    pos_y = 1.0 + radius_y * (cs.cos(2.0 * cs.pi * freq_fast * t_adj))  # * cs.cos(2.0 * cs.pi * freq_slow * t_adj))
+    pos_y = 1.0 + radius_y * (cs.cos(2.0 * cs.pi * freq_fast * t_adj))
     pos_z = 3.5 + radius_z * (cs.sin(2.0 * cs.pi * freq_fast * t_adj) * cs.sin(2.0 * cs.pi * freq_slow * t_adj))
 
     # TODO: define yaw trajectory
@@ -437,31 +433,43 @@ def compute_geometric_trajectory(quad, duration=30.0, dt=0.001):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Generate a quadrotor trajectory.')
+    parser.add_argument('--traj_type', help='Trajectory type to generate', required=True)
+
+    args = parser.parse_args()
+    traj_type = args.traj_type
 
     start_time = time.time()
     quad = Quad(0.85, 10.0)
     debug = False
+
+    # the arena bounds, at the moment only used by the random trajectory generator
     arena_bound_max = np.array([8.0, 5.0, 5.0])
     arena_bound_min = np.array([-4.0, -4.0, 1.0])
 
     ############################################
-    # geometric trajectory settings
-    # dt = 0.001
-    # duration = 60.0
-    # output_fn = "/home/elia/Downloads/sat06.csv"
-    # trajectory, motor_inputs, t_vec = compute_geometric_trajectory(quad, duration, dt)
+    if traj_type == 'geometric':
+        # geometric trajectory settings
+        dt = 0.001
+        duration = 60.0
+        output_fn = "satellite_trajectory.csv"
+        trajectory, motor_inputs, t_vec = compute_geometric_trajectory(quad, duration, dt)
     ############################################
-
-    ############################################
-    # random trajectory settings
-    freq_x = 0.29
-    freq_y = 0.27
-    freq_z = 0.7
-    dt = 0.01
-    duration = 120.0
-    output_fn = "/home/elia/Downloads/rp10.csv"
-    trajectory, motor_inputs, t_vec = compute_random_trajectory(quad, arena_bound_max, arena_bound_min, freq_x, freq_y,
-                                                                freq_z, duration, dt)
+    elif traj_type == 'random':
+        ############################################
+        # random trajectory settings
+        freq_x = 0.29
+        freq_y = 0.27
+        freq_z = 0.7
+        dt = 0.01
+        duration = 120.0
+        output_fn = "random_trajectory.csv"
+        trajectory, motor_inputs, t_vec = compute_random_trajectory(quad, arena_bound_max, arena_bound_min, freq_x,
+                                                                    freq_y,
+                                                                    freq_z, duration, dt)
+    else:
+        print("Unknown trajectory type.")
+        exit()
     ############################################
 
     if check_trajectory(trajectory, motor_inputs, t_vec, False):
@@ -469,8 +477,7 @@ if __name__ == '__main__':
             debug_plot(trajectory, motor_inputs, t_vec)
         draw_poly(trajectory[:, :13], motor_inputs, t_vec)
 
-        # TODO: subsample the trajectory
-
+        # the saved trajectory is sampled at 100Hz
         take_every_nth = int(0.01 / dt)
 
         # save trajectory to csv

@@ -190,7 +190,7 @@ def smooth(x, window_len=11, window='hanning'):
     return y
 
 
-def compute_full_traj(quad, t_np, pos_np, vel_np, alin_np):
+def compute_full_traj(quad, t_np, pos_np, vel_np, alin_np, jerk_np, snap_np):
     len_traj = t_np.shape[0]
     dt = np.mean(np.diff(t_np))
 
@@ -248,7 +248,7 @@ def compute_full_traj(quad, t_np, pos_np, vel_np, alin_np):
                 break
 
     arot_np = np.gradient(rate_np, axis=0)
-    trajectory = np.concatenate([pos_np, att_np, vel_np, rate_np, alin_np, arot_np], axis=1)
+    trajectory = np.concatenate([pos_np, att_np, vel_np, rate_np, alin_np, arot_np, jerk_np, snap_np], axis=1)
     motor_inputs = np.zeros((pos_np.shape[0], 4))
 
     # Compute inputs
@@ -354,7 +354,10 @@ def compute_random_trajectory(quad, arena_bound_max, arena_bound_min, freq_x, fr
                                 smooth(np.squeeze(acc_arena[:, 2]), window_len=11)[:, np.newaxis]], axis=1)
     t_np = t_vec
 
-    trajectory, motor_inputs, t_vec = compute_full_traj(quad, t_np, pos_arena, vel_arena, acc_arena)
+    jerk_np = np.zeros_like(acc_arena)
+    snap_np = np.zeros_like(acc_arena)
+
+    trajectory, motor_inputs, t_vec = compute_full_traj(quad, t_np, pos_arena, vel_arena, acc_arena, jerk_np, snap_np)
 
     return trajectory, motor_inputs, t_vec
 
@@ -385,11 +388,18 @@ def compute_geometric_trajectory(quad, duration=30.0, dt=0.001):
     # freq_slow = 0.009
     # freq_fast = 0.33
     # slow config
-    freq_slow = 0.02
-    freq_fast = 0.12
-    pos_x = 3.0 + radius_x * (cs.sin(2.0 * cs.pi * freq_fast * t_adj) * cs.cos(2.0 * cs.pi * freq_slow * t_adj))
-    pos_y = 1.0 + radius_y * (cs.cos(2.0 * cs.pi * freq_fast * t_adj))
-    pos_z = 3.5 + radius_z * (cs.sin(2.0 * cs.pi * freq_fast * t_adj) * cs.sin(2.0 * cs.pi * freq_slow * t_adj))
+    # freq_slow = 0.02
+    # freq_fast = 0.12
+    # pos_x = 3.0 + radius_x * (cs.sin(2.0 * cs.pi * freq_fast * t_adj) * cs.cos(2.0 * cs.pi * freq_slow * t_adj))
+    # pos_y = 1.0 + radius_y * (cs.cos(2.0 * cs.pi * freq_fast * t_adj))
+    # pos_z = 3.5 + radius_z * (cs.sin(2.0 * cs.pi * freq_fast * t_adj) * cs.sin(2.0 * cs.pi * freq_slow * t_adj))
+
+    # circle for Sihao
+    radius = 1.5
+    freq = 0.45
+    pos_x = 1.5 + radius * cs.sin(2.0 * cs.pi * freq * t_adj)
+    pos_y = 0.0 + radius * cs.cos(2.0 * cs.pi * freq * t_adj)
+    pos_z = 1.0
 
     # TODO: define yaw trajectory
     pos = cs.vertcat(pos_x, pos_y, pos_z)
@@ -411,23 +421,29 @@ def compute_geometric_trajectory(quad, duration=30.0, dt=0.001):
     pos_list = []
     vel_list = []
     alin_list = []
+    jerk_list = []
+    snap_list = []
     t_adj_list = []
     for t_curr in t_vec:
         t_adj_list.append(f_t_adj(t_curr).full().squeeze())
         pos_list.append(f_pos(t_curr).full().squeeze())
         vel_list.append(f_vel(t_curr).full().squeeze())
         alin_list.append(f_acc(t_curr).full().squeeze())
+        jerk_list.append(f_jerk(t_curr).full().squeeze())
+        snap_list.append(f_snap(t_curr).full().squeeze())
 
     t_adj_np = np.array(t_adj_list)
     pos_np = np.array(pos_list)
     vel_np = np.array(vel_list)
     alin_np = np.array(alin_list)
+    jerk_np = np.array(jerk_list)
+    snap_np = np.array(snap_list)
 
     if debug:
         plt.plot(t_adj_np)
         plt.show()
 
-    trajectory, motor_inputs, t_vec = compute_full_traj(quad, t_vec, pos_np, vel_np, alin_np)
+    trajectory, motor_inputs, t_vec = compute_full_traj(quad, t_vec, pos_np, vel_np, alin_np, jerk_np, snap_np)
 
     return trajectory, motor_inputs, t_vec
 
@@ -512,6 +528,15 @@ if __name__ == '__main__':
         df_traj['u_2'] = motor_inputs[::take_every_nth, 1] / quad.max_thrust_per_motor
         df_traj['u_3'] = motor_inputs[::take_every_nth, 2] / quad.max_thrust_per_motor
         df_traj['u_4'] = motor_inputs[::take_every_nth, 3] / quad.max_thrust_per_motor
+
+        # Sihao needs jerk and snap
+        df_traj['jerk_x'] = trajectory[::take_every_nth, 19]
+        df_traj['jerk_y'] = trajectory[::take_every_nth, 20]
+        df_traj['jerk_z'] = trajectory[::take_every_nth, 21]
+
+        df_traj['snap_x'] = trajectory[::take_every_nth, 22]
+        df_traj['snap_y'] = trajectory[::take_every_nth, 23]
+        df_traj['snap_z'] = trajectory[::take_every_nth, 24]
 
         print("Saving trajectory to [%s]." % output_fn)
         df_traj.to_csv(output_fn, index=False)

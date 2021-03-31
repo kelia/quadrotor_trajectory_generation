@@ -1,6 +1,6 @@
+import casadi as cs
 import numpy as np
 import pyquaternion
-import casadi as cs
 
 
 def euler_to_quaternion(roll, pitch, yaw):
@@ -19,15 +19,7 @@ def quaternion_to_euler(q):
 
 
 def unit_quat(q):
-    """
-    Normalizes a quaternion to be unit modulus.
-    :param q: 4-dimensional numpy array or CasADi object
-    :return: the unit quaternion in the same data format as the original one
-    """
-
     if isinstance(q, np.ndarray):
-        # if (q == np.zeros(4)).all():
-        #     q = np.array([1, 0, 0, 0])
         q_norm = np.sqrt(np.sum(q ** 2))
     else:
         q_norm = cs.sqrt(cs.sumsqr(q))
@@ -94,61 +86,6 @@ def rotation_matrix_to_quat(rot):
 
     q = pyquaternion.Quaternion(matrix=rot)
     return np.array([q.w, q.x, q.y, q.z])
-
-
-def undo_quaternion_flip(q_past, q_current):
-    """
-    Detects if q_current generated a quaternion jump and corrects it. Requires knowledge of the previous quaternion
-    in the series, q_past
-    :param q_past: 4-dimensional vector representing a quaternion in wxyz form.
-    :param q_current: 4-dimensional vector representing a quaternion in wxyz form. Will be corrected if it generates
-    a flip wrt q_past.
-    :return: q_current with the flip removed if necessary
-    """
-
-    if np.sqrt(np.sum((q_past - q_current) ** 2)) > np.sqrt(np.sum((q_past + q_current) ** 2)):
-        return -q_current
-    return q_current
-
-
-def skew_symmetric(v):
-    """
-    Computes the skew-symmetric matrix of a 3D vector (PAMPC version)
-
-    :param v: 3D numpy vector or CasADi MX
-    :return: the corresponding skew-symmetric matrix of v with the same data type as v
-    """
-
-    if isinstance(v, np.ndarray):
-        return np.array([[0, -v[0], -v[1], -v[2]],
-                         [v[0], 0, v[2], -v[1]],
-                         [v[1], -v[2], 0, v[0]],
-                         [v[2], v[1], -v[0], 0]])
-
-    return cs.vertcat(
-        cs.horzcat(0, -v[0], -v[1], -v[2]),
-        cs.horzcat(v[0], 0, v[2], -v[1]),
-        cs.horzcat(v[1], -v[2], 0, v[0]),
-        cs.horzcat(v[2], v[1], -v[0], 0))
-
-
-def decompose_quaternion(q):
-    """
-    Decomposes a quaternion into a z rotation and an xy rotation
-    :param q: 4-dimensional numpy array of CasADi MX (format qw, qx, qy, qz)
-    :return: two 4-dimensional arrays (same format as input), where the first contains the xy rotation and the second
-    the z rotation, in quaternion forms.
-    """
-
-    w, x, y, z = q[0], q[1], q[2], q[3]
-
-    if isinstance(q, cs.MX):
-        qz = unit_quat(cs.vertcat(w, 0, 0, z))
-    else:
-        qz = unit_quat(np.array([w, 0, 0, z]))
-    qxy = q_dot_q(q, quaternion_inverse(qz))
-
-    return qxy, qz
 
 
 def quaternion_inverse(q):

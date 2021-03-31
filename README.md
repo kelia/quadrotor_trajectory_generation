@@ -9,13 +9,12 @@ Install `casadi`.
 ## Usage
 
 ```
-python generate_trajectory.py --traj_type [random | geometric]
+python generate_trajectory.py --settings_file=config/settings.yaml
 ```
 
 The script either generates `geometric` trajectories or `random` trajectories.
 
-To edit the random trajectories: edit `freq_x`, `freq_y`, `freq_z` in the `main` function to control the aggressiveness
+To edit the generated trajectories (duration, sampling frequency, ...): edit `config/settings.yaml`. 
+The geometric trajectory type allows to define an arbitrary trajectory that can be expressed as a symbolic function. To define such function, edit `utils/geometric_traj.py` and define the position as a function of time in casadi syntax.
+To edit the random trajectories, edit `freq_x`, `freq_y`, `freq_z` in the settings file to control the aggressiveness
 of the generated trajectory.
-
-To edit the geometric trajectory: edit the symbolic functions describing the evolution of the position over time, i.e.
-edit `pos_x`, `pos_y`, `pos_z` in the function `compute_geometric_trajectory`.

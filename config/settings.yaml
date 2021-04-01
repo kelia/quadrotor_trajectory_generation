@@ -9,7 +9,7 @@ quadrotor:
   rotor_drag_coeff: 0.13  # [Nm/N]
   arm_length: 0.15
 trajectory:
-  type: "random"  # "random", "geometric"
+  type: "geometric"  # "random", "geometric"
   duration: 60.0
   dt: 0.02    # [s] trajectory will be sampled at this frequency
   seed: -1    # set to -1 for random seed

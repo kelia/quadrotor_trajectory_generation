@@ -133,20 +133,21 @@ class TrajectoryGenerator:
             jerk_list.append(f_jerk(t_curr).full().squeeze())
             snap_list.append(f_snap(t_curr).full().squeeze())
 
-        t_adj_np = np.array(t_adj_list)
-        pos_np = np.array(pos_list)
-        vel_np = np.array(vel_list)
-        alin_np = np.array(alin_list)
-        jerk_np = np.array(jerk_list)
-        snap_np = np.array(snap_list)
+        trajectory = Trajectory()
+        trajectory.t = np.array(t_vec)
+        trajectory.pos = np.array(pos_list)
+        trajectory.vel = np.array(vel_list)
+        trajectory.acc = np.array(alin_list)
+        trajectory.jerk = np.array(jerk_list)
+        trajectory.snap = np.array(snap_list)
 
         if self.config.debug:
-            plt.plot(t_adj_np)
+            plt.plot(trajectory.t)
             plt.show()
 
-        trajectory, motor_inputs, t_vec = self.compute_full_traj(t_vec, pos_np, vel_np, alin_np, jerk_np, snap_np)
+        trajectory.compute_full_traj(self.quad)
 
-        return trajectory, motor_inputs, t_vec
+        return trajectory
 
     def compute_random_trajectory(self):
         print("Computing random trajectory!")

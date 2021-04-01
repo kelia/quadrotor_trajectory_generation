@@ -25,6 +25,10 @@ class Settings:
             self.rotor_drag_coeff = quadrotor['rotor_drag_coeff']
             self.quad_arm_length = quadrotor['arm_length']
 
+            assert self.quad_mass > 0.0
+            assert all(type(value) is float for value in self.quad_inertia)
+            assert all(value > 0.0 for value in self.quad_inertia)
+
             # --- trajectory ---
             trajectory = settings['trajectory']
             self.traj_type = trajectory['type']
@@ -34,8 +38,14 @@ class Settings:
             self.bound_min = np.array(trajectory['bound_min'])
             self.bound_max = np.array(trajectory['bound_max'])
             self.dt_gen = trajectory['dt_gen']
+            assert np.all(self.bound_min <= self.bound_max)
 
             random_traj = trajectory['random']
-            self.rand_traj_freq_x = random_traj['freq_x']
-            self.rand_traj_freq_y = random_traj['freq_y']
-            self.rand_traj_freq_z = random_traj['freq_z']
+            self.rand_num_kernels = random_traj['num_kernels']
+            self.rand_max_length_scale = random_traj['max_length_scale']
+            self.rand_min_length_scale = random_traj['min_length_scale']
+            self.rand_max_period = random_traj['max_period']
+            self.rand_min_period = random_traj['min_period']
+
+            assert self.rand_min_length_scale <= self.rand_max_length_scale
+            assert self.rand_min_period <= self.rand_max_period

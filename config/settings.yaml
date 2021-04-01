@@ -9,14 +9,16 @@ quadrotor:
   rotor_drag_coeff: 0.13  # [Nm/N]
   arm_length: 0.15
 trajectory:
-  type: "geometric"  # "random", "geometric"
+  type: "random"  # "random", "geometric"
   duration: 60.0
   dt: 0.02    # [s] trajectory will be sampled at this frequency
   seed: -1    # set to -1 for random seed
   bound_min: [ -4.0, -4.0, 1.0 ]
   bound_max: [ 8.0, 5.0, 5.0 ]
   random: # "random" trajectory specific settings
-    freq_x: 0.9
-    freq_y: 0.7
-    freq_z: 0.7
-  dt_gen: 0.01 # numerical diff is done with this spacing, does not affect dt of saved trajectory
+    num_kernels: 3
+    max_length_scale: 0.12
+    min_length_scale: 0.10
+    max_period: 50.0
+    min_period: 20.0
+  dt_gen: 0.005 # numerical diff is done with this spacing, does not affect dt of saved trajectory
